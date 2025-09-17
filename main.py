@@ -14,9 +14,22 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import copy
 import os
 from dotenv import load_dotenv
+import struct
 
 # 加载环境变量
 load_dotenv()
+
+
+def getVideoDuration(url: str):
+    r = requests.get(url, stream=True)
+    for data in r.iter_content(chunk_size=512):
+        if data.find(b'mvhd') > 0:
+            index = data.find(b'mvhd') + 4
+            time_scale = struct.unpack('>I', data[index + 13:index + 13 + 4])
+            durations = struct.unpack('>I', data[index + 13 + 4:index + 13 + 4 + 4])
+            duration = durations[0] / time_scale[0]
+            return duration
+            break
 
 
 class YuketangHeartbeat:
@@ -163,7 +176,6 @@ class YuketangHeartbeat:
         except Exception as e:
             print(f"发送心跳失败: {e}")
             return None
-
     def get_video_progress(self):
         """获取视频播放进度"""
         params = {
@@ -190,7 +202,9 @@ class YuketangHeartbeat:
                 timeout=10
             )
 
+
             if response.status_code == 200:
+                # print(f"hello -{response.json()}")
                 return response.json()
             else:
                 print(f"获取进度失败，状态码: {response.status_code}")
@@ -777,6 +791,7 @@ class YuketangHeartbeat:
 
         # 获取视频单元信息
         leaf_info = self.get_leaf_info(classroom_id, leaf_id)
+        print(f"auto_configure_from_ids - {leaf_info}")
         if not leaf_info or not leaf_info.get('success'):
             print("主方法失败，尝试备用方法获取视频信息...")
             leaf_info = self.get_video_info_alternative(classroom_id, leaf_id)
@@ -834,7 +849,9 @@ class YuketangHeartbeat:
 
         # 从媒体信息中提取cc_id，尝试多种可能的字段名
         cc_id = media.get('ccid') or media.get('cc_id') or media.get('cc') or media.get('video_id')
-        duration = media.get('duration', 0)
+        #
+
+        #bug: 此处获取不到duration
 
         # 获取课堂信息
         classroom_info = self.get_classroom_info(classroom_id)
@@ -860,8 +877,14 @@ class YuketangHeartbeat:
         if cc_id:
             play_url_info = self.get_video_play_url(cc_id)
             if play_url_info and play_url_info.get('success'):
-                play_urls = play_url_info.get('data', {}).get('video_url', [])
+                sources = play_url_info.get('data', {}).get('playurl', {}).get('sources', {})
+                play_urls = []
+                for quality, urls in sources.items():
+                    # print(quality)
+                    play_urls.extend(urls)
                 print(f"视频播放地址获取成功，共{len(play_urls)}个清晰度")
+                # print(play_urls)
+        duration = getVideoDuration(play_urls[0])
 
         # 检查必要参数
         if not all([user_id, course_id, sku_id, cc_id]):
@@ -891,10 +914,10 @@ class YuketangHeartbeat:
             sku_id=sku_id,
             classroom_id=classroom_id,
             cc_id=cc_id,
-            duration=duration,
             csrf_token=csrf_token,
             university_id=university_id,
-            uv_id=university_id  # 通常uv_id和university_id相同
+            uv_id=university_id,
+            duration=duration,
         )
 
         print("参数配置完成:")
@@ -917,12 +940,10 @@ class YuketangHeartbeat:
             video_id = str(self.video_params['video_id'])
             progress_data = progress.get('data', {}).get(video_id, {})
             if progress_data:
-                # 更新duration
-                self.video_params['duration'] = progress_data.get('video_length', 0)
                 return {
                     'rate': progress_data.get('rate', 0),
                     'last_point': progress_data.get('last_point', 0),
-                    'duration': progress_data.get('video_length', 0)
+                    'duration': self.video_params.get('duration', 0)
                 }
         return None
 
@@ -938,7 +959,7 @@ class YuketangHeartbeat:
             last_point = progress_info['last_point']
             duration = progress_info['duration']
 
-            print(f"当前进度: {rate:.2%}, 最后位置: {last_point:.1f}s")
+            print(f"当前进度: {rate:.2%}, 最后位置: {last_point:.1f}s, 总时长: {duration}")
 
             if rate >= 0.9:  # 如果已经看了90%以上
                 print("视频已基本看完，无需继续观看")
