@@ -622,7 +622,7 @@ class YuketangHeartbeat:
                 if leaf.get('leaf_type') == 3 and not leaf_list:
                     leafinfo_id = leaf.get('leafinfo_id')
                     richtext_info = {
-                        'id': leafinfo_id or leaf.get('id'),
+                        'id': leaf.get('id'),  # 修复！只能使用真实的 id，不能使用 leafinfo_id
                         'name': leaf.get('name', '未知图文'),
                         'section_id': leaf.get('id'),
                         'chapter_name': chapter_name,
@@ -641,10 +641,10 @@ class YuketangHeartbeat:
         模拟图文/课程任务的阅读打卡。
         利用发掘到的 user_article_finish 接口真正标记图文为已读。
         """
+        status_url = f"{self.base_url}/mooc-api/v1/lms/learn/user_article_finish_status/{leaf_id}/"
         finish_url = f"{self.base_url}/mooc-api/v1/lms/learn/user_article_finish/{leaf_id}/"
 
-        print(f"正在打开图文: {leaf_name} (ID: {leaf_id})")
-        print(f"  URL: {finish_url}")
+        print(f"正在处理图文: {leaf_name} (ID: {leaf_id})")
 
         # 构造打卡专用的请求头（包含关键的 xtbz 参数）
         api_headers = self.headers.copy()
@@ -658,12 +658,22 @@ class YuketangHeartbeat:
         # 移除与接口请求无关或会导致 400 的头部
         api_headers.pop('Upgrade-Insecure-Requests', None)
 
-        # 模拟阅读停留时间
-        if stay_seconds > 0:
-            print(f"  模拟阅读停留 {stay_seconds} 秒...")
-            time.sleep(stay_seconds)
-
         try:
+            # 1. 检查当前是否已经完成
+            status_resp = self.session.get(status_url, headers=api_headers, timeout=10)
+            if status_resp.status_code == 200:
+                status_data = status_resp.json()
+                if status_data.get('success') and status_data.get('data', {}).get('finish') == 1:
+                    print(f"  ⏭️ 图文 '{leaf_name}' 已经打卡完成，跳过。")
+                    return True
+
+            print(f"  URL: {finish_url}")
+
+            # 模拟阅读停留时间
+            if stay_seconds > 0:
+                print(f"  模拟阅读停留 {stay_seconds} 秒...")
+                time.sleep(stay_seconds)
+
             response = self.session.get(
                 finish_url,
                 headers=api_headers,
