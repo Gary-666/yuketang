@@ -101,7 +101,7 @@ python main.py
 | `VIDEO_SPEED` | 视频播放速度倍数 | 1.5 |
 | `HEARTBEAT_INTERVAL` | 心跳发送间隔（秒） | 5 |
 | `MAX_CONCURRENT_VIDEOS` | 最大并发观看视频数 | 3 |
-| `AUTO_RICHTEXT` | 是否开启图文自动浏览 | false |
+| `AUTO_RICHTEXT` | 是否开启图文自动浏览 | true |
 | `RICHTEXT_STAY_SECONDS` | 每篇图文模拟停留时间（秒） | 3 |
 | `RICHTEXT_SKIP_DELAY` | 篇间切换的延迟时间（秒） | 1 |
 | `SKIP_COMPLETED` | 是否跳过已完成的任务 | true |
