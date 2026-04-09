@@ -529,7 +529,7 @@ class YuketangHeartbeat:
         }
 
         # 如果有sign参数，添加到请求中
-        if sign:
+        if sign and sign.strip():  # 加个 strip() 避免空字符串
             params['sign'] = sign
 
         headers = self.headers.copy()
@@ -581,6 +581,173 @@ class YuketangHeartbeat:
         except Exception as e:
             print(f"获取课程章节失败: {e}")
             return None
+
+    def get_richtext_leaf_list(self, classroom_id, sign=None, debug=False):
+        """获取课程中所有图文类型的leaf列表（leaf_type==3）"""
+        chapters_data = self.get_course_chapters(classroom_id, sign)
+        if not chapters_data or not chapters_data.get('success'):
+            return []
+
+        richtext_leafs = []
+        chapters = chapters_data.get('data', {}).get('course_chapter', [])
+
+        print(f"解析章节数据，共{len(chapters)}个章节（查找图文）")
+
+        for chapter in chapters:
+            chapter_name = chapter.get('name', '未知章节')
+            section_leaf_list = chapter.get('section_leaf_list', [])
+
+            for leaf in section_leaf_list:
+                if debug:
+                    print(f"  调试 - Section Leaf: name='{leaf.get('name')}', type='{leaf.get('leaf_type')}', id={leaf.get('id')}")
+
+                # 检查子节点 leaf_list
+                leaf_list = leaf.get('leaf_list', [])
+                if leaf_list:
+                    for actual_leaf in leaf_list:
+                        if actual_leaf.get('leaf_type') == 3:
+                            richtext_info = {
+                                'id': actual_leaf.get('id'),
+                                'name': actual_leaf.get('name', '未知图文') or leaf.get('name', '未知图文'),
+                                'section_id': leaf.get('id'),
+                                'chapter_name': chapter_name,
+                                'leaf_type': 3,
+                                'sku_id': leaf.get('sku_id'),
+                                'leafinfo_id': actual_leaf.get('leafinfo_id'),
+                            }
+                            richtext_leafs.append(richtext_info)
+                            print(f"  找到图文: ID={richtext_info['id']}, 名称={richtext_info['name']}, 章节={chapter_name}")
+                
+                # 有些单独的节点可能外层就是 leaf_type == 3
+                if leaf.get('leaf_type') == 3 and not leaf_list:
+                    leafinfo_id = leaf.get('leafinfo_id')
+                    richtext_info = {
+                        'id': leafinfo_id or leaf.get('id'),
+                        'name': leaf.get('name', '未知图文'),
+                        'section_id': leaf.get('id'),
+                        'chapter_name': chapter_name,
+                        'leaf_type': 3,
+                        'sku_id': leaf.get('sku_id'),
+                        'leafinfo_id': leafinfo_id,
+                    }
+                    richtext_leafs.append(richtext_info)
+                    print(f"  找到图文(外部): ID={richtext_info['id']}, 名称={richtext_info['name']}, 章节={chapter_name}")
+
+        print(f"总共找到 {len(richtext_leafs)} 个图文")
+        return richtext_leafs
+
+    def view_richtext(self, classroom_id, leaf_id, leaf_name='未知图文', stay_seconds=3):
+        """
+        模拟图文/课程任务的阅读打卡。
+        利用发掘到的 user_article_finish 接口真正标记图文为已读。
+        """
+        finish_url = f"{self.base_url}/mooc-api/v1/lms/learn/user_article_finish/{leaf_id}/"
+
+        print(f"正在打开图文: {leaf_name} (ID: {leaf_id})")
+        print(f"  URL: {finish_url}")
+
+        # 构造打卡专用的请求头（包含关键的 xtbz 参数）
+        api_headers = self.headers.copy()
+        api_headers.update({
+            'Accept': 'application/json, text/plain, */*',
+            'classroom-id': str(classroom_id),
+            'xtbz': 'ykt',  # 最关键的头部
+            'x-client': 'web'
+        })
+        
+        # 移除与接口请求无关或会导致 400 的头部
+        api_headers.pop('Upgrade-Insecure-Requests', None)
+
+        # 模拟阅读停留时间
+        if stay_seconds > 0:
+            print(f"  模拟阅读停留 {stay_seconds} 秒...")
+            time.sleep(stay_seconds)
+
+        try:
+            response = self.session.get(
+                finish_url,
+                headers=api_headers,
+                timeout=15
+            )
+
+            if response.status_code == 200:
+                result = response.json()
+                if result.get("success"):
+                    print(f"  ✅ 图文 '{leaf_name}' 打卡完成")
+                    return True
+                else:
+                    print(f"  ⚠️ 图文 '{leaf_name}' 接口调用失败: {result}")
+            else:
+                print(f"  ❌ 打开失败 (状态码: {response.status_code})")
+                return False
+
+        except Exception as e:
+            print(f"  ❌ 请求异常: {str(e)}")
+            return False
+
+        return False
+
+    def batch_view_richtexts(self, classroom_id, sign=None, stay_seconds=3,
+                             skip_delay=1, debug=False):
+        """批量自动观看课程中的所有图文内容"""
+        print("开始批量浏览图文内容...")
+
+        # 首先确保基本参数已配置（获取图文列表依赖 video_params 中的部分字段）
+        richtext_leafs = self.get_richtext_leaf_list(classroom_id, sign, debug=debug)
+
+        if not richtext_leafs:
+            print("没有找到任何图文内容")
+            return {'total': 0, 'success': 0, 'failed': 0}
+
+        print(f"准备浏览 {len(richtext_leafs)} 个图文")
+
+        success_count = 0
+        failed_count = 0
+
+        for i, richtext_info in enumerate(richtext_leafs, 1):
+            leaf_id = richtext_info['id']
+            leaf_name = richtext_info['name']
+            chapter_name = richtext_info['chapter_name']
+
+            print(f"\n{'='*50}")
+            print(f"正在处理第 {i}/{len(richtext_leafs)} 个图文")
+            print(f"  名称: {leaf_name}")
+            print(f"  章节: {chapter_name}")
+            print(f"  ID:   {leaf_id}")
+
+            if not leaf_id:
+                print("  ❌ leaf_id 为空，跳过")
+                failed_count += 1
+                continue
+
+            result = self.view_richtext(
+                classroom_id=classroom_id,
+                leaf_id=leaf_id,
+                leaf_name=leaf_name,
+                stay_seconds=stay_seconds
+            )
+
+            if result:
+                success_count += 1
+            else:
+                failed_count += 1
+
+            # 每篇图文之间的间隔，避免请求过快
+            if i < len(richtext_leafs):
+                time.sleep(skip_delay)
+
+        print(f"\n{'='*60}")
+        print("图文批量浏览完成！")
+        print(f"总图文数: {len(richtext_leafs)}")
+        print(f"成功浏览: {success_count}")
+        print(f"失败:     {failed_count}")
+        print(f"{'='*60}")
+
+        return {
+            'total': len(richtext_leafs),
+            'success': success_count,
+            'failed': failed_count
+        }
 
     def get_video_leaf_list(self, classroom_id, sign=None, debug=False):
         """获取课程中所有视频类型的leaf列表"""
@@ -1170,7 +1337,7 @@ def main():
 
     # 从环境变量加载配置
     classroom_id = int(os.getenv('CLASSROOM_ID', 12345678))
-    sign = os.getenv('SIGN', 'your_sign_here')
+    sign = os.getenv('SIGN')
     university_id = int(os.getenv('UNIVERSITY_ID', 1234))
     csrf_token = os.getenv('CSRF_TOKEN', 'your_csrf_token_here')
     session_id = os.getenv('SESSION_ID', 'your_session_id_here')
@@ -1184,6 +1351,11 @@ def main():
     test_video_count = int(os.getenv('TEST_VIDEO_COUNT', 5))
     use_concurrent = os.getenv('USE_CONCURRENT', 'true').lower() == 'true'
     debug = os.getenv('DEBUG', 'false').lower() == 'true'
+
+    # 图文观看配置
+    auto_richtext = os.getenv('AUTO_RICHTEXT', 'false').lower() == 'true'
+    richtext_stay_seconds = int(os.getenv('RICHTEXT_STAY_SECONDS', 3))
+    richtext_skip_delay = float(os.getenv('RICHTEXT_SKIP_DELAY', 1))
 
     # 设置cookies（从环境变量获取）
     cookies = {
@@ -1212,6 +1384,27 @@ def main():
         'csrf_token': csrf_token
     }
 
+    # ─── 图文自动浏览 ───────────────────────────────────────────
+    if auto_richtext:
+        print("\n" + "="*60)
+        print("开始自动浏览图文内容...")
+        print(f"配置参数: 每篇停留={richtext_stay_seconds}s, 篇间间隔={richtext_skip_delay}s")
+        print("="*60)
+
+        richtext_result = heartbeat.batch_view_richtexts(
+            classroom_id=classroom_id,
+            sign=sign,
+            stay_seconds=richtext_stay_seconds,
+            skip_delay=richtext_skip_delay,
+            debug=debug
+        )
+        print(f"图文浏览结果: 共{richtext_result['total']}篇, "
+              f"成功{richtext_result['success']}篇, "
+              f"失败{richtext_result['failed']}篇")
+    else:
+        print("图文自动浏览未启用（可在 .env 中设置 AUTO_RICHTEXT=true 开启）")
+
+    # ─── 视频自动观看 ───────────────────────────────────────────
     video_list = heartbeat.get_video_leaf_list(classroom_id, sign, debug=debug)
     if video_list:
         print(f"找到 {len(video_list)} 个视频")
