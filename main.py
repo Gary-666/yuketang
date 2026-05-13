@@ -815,7 +815,6 @@ class YuketangHeartbeat:
                                 }
                                 video_leafs.append(video_info)
                                 print(f"  找到视频: ID={video_info['id']} (实际leaf), 名称={video_info['name']}, 章节={chapter_name}")
-                                break
                     else:
                         # 如果没有leaf_list，这可能是一个简单的视频section
                         # 我们需要通过其他方式找到实际的video leaf ID
